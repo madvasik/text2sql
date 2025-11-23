@@ -1,0 +1,41 @@
+# База данных и её файлы
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Описание загруженных данных
+data/uploaded_data_description.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg-info/
+*.egg
+
+# Виртуальные окружения
+.venv/
+venv/
+env/
+ENV/
+
+# Переменные окружения
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+

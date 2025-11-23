@@ -12,6 +12,142 @@ from text2sql.db import (
 from text2sql.llm import generate_sql_from_nl, decide_visualization, explain_sql_brief, summarize_result_brief, validate_api_key
 
 
+def user_requests_chart(question: str) -> bool:
+    """Проверяет, просит ли пользователь график напрямую в запросе."""
+    question_lower = question.lower()
+    chart_keywords = [
+        "график", "диаграмма", "визуализация", "визуализировать",
+        "chart", "graph", "plot", "visualization", "visualize",
+        "построить график", "показать график", "нарисовать график",
+        "столбчатая", "линейная", "круговая", "pie", "bar", "line"
+    ]
+    return any(keyword in question_lower for keyword in chart_keywords)
+
+
+def auto_detect_chart_columns(df):
+    """Автоматически определяет колонки для графика, если они не указаны."""
+    import pandas as pd
+    
+    if len(df.columns) < 2:
+        return None, None
+    
+    # Ищем первую текстовую/категориальную колонку для X
+    x_col = None
+    for col in df.columns:
+        if df[col].dtype == 'object' or df[col].dtype.name == 'category':
+            x_col = col
+            break
+    
+    # Если не нашли текстовую, берем первую колонку
+    if x_col is None:
+        x_col = df.columns[0]
+    
+    # Ищем первую числовую колонку для Y
+    y_col = None
+    for col in df.columns:
+        if col != x_col and pd.api.types.is_numeric_dtype(df[col]):
+            y_col = col
+            break
+    
+    # Если не нашли числовую, берем вторую колонку
+    if y_col is None:
+        y_col = df.columns[1] if len(df.columns) > 1 else None
+    
+    return x_col, y_col
+
+
+def generate_chart_png(df, chart_type: str, x_col: str, y_col: str) -> Optional[bytes]:
+    """Генерирует PNG изображение графика и возвращает байты."""
+    from io import BytesIO
+    import matplotlib
+    matplotlib.use('Agg')  # Используем backend без GUI
+    import matplotlib.pyplot as plt
+    
+    if chart_type == "none" or not x_col or not y_col:
+        return None
+    
+    if x_col not in df.columns or y_col not in df.columns:
+        return None
+    
+    try:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        if chart_type == "bar":
+            ax.bar(df[x_col].astype(str), df[y_col])
+            ax.set_xlabel(x_col)
+            ax.set_ylabel(y_col)
+            ax.set_title(f"{y_col} по {x_col}")
+            plt.xticks(rotation=45, ha='right')
+        elif chart_type == "line":
+            ax.plot(df[x_col].astype(str), df[y_col], marker='o')
+            ax.set_xlabel(x_col)
+            ax.set_ylabel(y_col)
+            ax.set_title(f"{y_col} по {x_col}")
+            plt.xticks(rotation=45, ha='right')
+        elif chart_type == "pie":
+            ax.pie(df[y_col], labels=df[x_col].astype(str), autopct='%1.1f%%')
+            ax.set_title(f"{y_col} по {x_col}")
+        else:
+            plt.close(fig)
+            return None
+        
+        plt.tight_layout()
+        
+        # Сохраняем в BytesIO
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        png_bytes = buf.getvalue()
+        buf.close()
+        plt.close(fig)
+        
+        return png_bytes
+    except Exception as e:
+        return None
+
+
+def render_chart(df, chart_type: str, x_col: str, y_col: str):
+    """Строит график указанного типа на основе DataFrame."""
+    if chart_type == "none":
+        return False
+    
+    # Если колонки не указаны, пытаемся определить автоматически
+    if not x_col or not y_col:
+        x_col, y_col = auto_detect_chart_columns(df)
+        if not x_col or not y_col:
+            return False
+    
+    # Проверяем наличие колонок
+    if x_col not in df.columns or y_col not in df.columns:
+        return False
+    
+    try:
+        if chart_type == "bar":
+            st.bar_chart(df.set_index(x_col)[y_col])
+        elif chart_type == "line":
+            st.line_chart(df.set_index(x_col)[y_col])
+        elif chart_type == "pie":
+            # Для pie chart используем plotly или matplotlib
+            try:
+                import plotly.express as px
+                fig = px.pie(df, values=y_col, names=x_col, title=f"{y_col} по {x_col}")
+                st.plotly_chart(fig, use_container_width=True)
+            except ImportError:
+                # Fallback на matplotlib
+                import matplotlib.pyplot as plt
+                fig, ax = plt.subplots()
+                ax.pie(df[y_col], labels=df[x_col], autopct='%1.1f%%')
+                ax.set_title(f"{y_col} по {x_col}")
+                st.pyplot(fig)
+                plt.close(fig)
+        else:
+            return False
+        return True
+    except Exception as e:
+        st.warning(f"Не удалось построить график: {e}")
+        return False
+
+
 def init() -> None:
     # No .env loading; key is provided via UI and stored in process env
     ensure_database_exists()
@@ -215,10 +351,46 @@ def main() -> None:
                             try:
                                 import pandas as pd
                                 df_preview = pd.DataFrame(rows, columns=headers).head(20)
-                                result_summary = summarize_result_brief(question, sql, df_preview.to_dict(orient="records"))
+                                schema_desc = st.session_state.get("schema_description")
+                                result_summary = summarize_result_brief(question, sql, df_preview.to_dict(orient="records"), schema_description=schema_desc)
                             except Exception:
                                 pass
-                            st.session_state["last_result"] = {"sql": sql, "headers": headers, "rows": rows, "question": question, "rationale": rationale, "summary": result_summary}
+                            
+                            # Определяем, нужен ли график
+                            chart_info = None
+                            try:
+                                import pandas as pd
+                                df_full = pd.DataFrame(rows, columns=headers)
+                                user_wants_chart = user_requests_chart(question)
+                                
+                                if user_wants_chart or len(df_full) > 0:
+                                    chart_info = decide_visualization(question, headers)
+                                    # Если пользователь просит напрямую, принудительно включаем график
+                                    if user_wants_chart and not chart_info.get("need_chart"):
+                                        chart_info["need_chart"] = True
+                                        # Пытаемся определить тип графика из запроса
+                                        question_lower = question.lower()
+                                        if "столбчатая" in question_lower or "bar" in question_lower:
+                                            chart_info["chart_type"] = "bar"
+                                        elif "линейная" in question_lower or "line" in question_lower:
+                                            chart_info["chart_type"] = "line"
+                                        elif "круговая" in question_lower or "pie" in question_lower:
+                                            chart_info["chart_type"] = "pie"
+                                        # Если тип не определен, используем bar по умолчанию
+                                        if chart_info["chart_type"] == "none":
+                                            chart_info["chart_type"] = "bar"
+                            except Exception:
+                                pass
+                            
+                            st.session_state["last_result"] = {
+                                "sql": sql, 
+                                "headers": headers, 
+                                "rows": rows, 
+                                "question": question, 
+                                "rationale": rationale, 
+                                "summary": result_summary,
+                                "chart_info": chart_info
+                            }
                         except Exception as e:
                             st.error(f"Не удалось выполнить SQL: {e}")
 
@@ -271,7 +443,35 @@ def main() -> None:
                 else:
                     st.caption("Для экспорта Excel установите пакет openpyxl: pip install openpyxl")
 
-            # Charts disabled by request – show only table and downloads
+            # Построение графиков
+            chart_info = last.get("chart_info")
+            if chart_info and chart_info.get("need_chart"):
+                chart_type = chart_info.get("chart_type", "none")
+                x_col = chart_info.get("x_col")
+                y_col = chart_info.get("y_col")
+                
+                if chart_type != "none":
+                    st.subheader("Визуализация")
+                    # Определяем колонки, если они не указаны
+                    if not x_col or not y_col:
+                        x_col, y_col = auto_detect_chart_columns(df)
+                    
+                    if render_chart(df, chart_type, x_col, y_col):
+                        # Показываем информацию о графике только если колонки были определены
+                        if x_col and y_col:
+                            chart_type_names = {"bar": "столбчатая", "line": "линейная", "pie": "круговая"}
+                            chart_name = chart_type_names.get(chart_type, chart_type)
+                            st.caption(f"Тип графика: {chart_name}, X: {x_col}, Y: {y_col}")
+                            
+                            # Кнопка скачивания PNG
+                            png_bytes = generate_chart_png(df, chart_type, x_col, y_col)
+                            if png_bytes:
+                                st.download_button(
+                                    "Скачать PNG",
+                                    data=png_bytes,
+                                    file_name=f"chart_{chart_type}.png",
+                                    mime="image/png"
+                                )
 
         summary = last.get("summary") or ""
         st.subheader("Краткое пояснение результата")
@@ -283,7 +483,8 @@ def main() -> None:
                     try:
                         import pandas as pd
                         df_preview = pd.DataFrame(rows, columns=headers).head(20)
-                        new_summary = summarize_result_brief(last_question, sql or "", df_preview.to_dict(orient="records"))
+                        schema_desc = st.session_state.get("schema_description")
+                        new_summary = summarize_result_brief(last_question, sql or "", df_preview.to_dict(orient="records"), schema_description=schema_desc)
                         st.session_state["last_result"]["summary"] = new_summary
                         if new_summary:
                             st.success("Готово")

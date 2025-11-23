@@ -166,7 +166,7 @@ def explain_sql_brief(question: str, sql: str, model: str = "mistral-small-lates
 
 
 EXPLAIN_RESULT_SYSTEM = (
-    "You summarize tabular query results. Given question, SQL and a small sample of rows, write a brief 2-3 sentence insight in Russian."
+    "You summarize tabular query results. Given question, SQL, table schema description, and a small sample of rows, write a brief 2-3 sentence insight in Russian."
 )
 
 
@@ -174,6 +174,7 @@ def summarize_result_brief(
     question: str,
     sql: str,
     preview_rows: List[Dict[str, Any]],
+    schema_description: Optional[str] = None,
     model: str = "mistral-small-latest",
 ) -> str:
     client = get_mistral_client()
@@ -182,6 +183,8 @@ def summarize_result_brief(
         "sql": sql,
         "preview": preview_rows[:20],
     }
+    if schema_description:
+        payload["schema_description"] = schema_description
     messages = [
         ChatMessage(role="system", content=EXPLAIN_RESULT_SYSTEM),
         ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
