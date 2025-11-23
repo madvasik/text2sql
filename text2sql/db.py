@@ -7,7 +7,7 @@ import re
 
 
 DATA_DIR = Path("data")
-DB_PATH = DATA_DIR / "example.db"
+DB_PATH = DATA_DIR / "database.db"
 
 
 def ensure_database_exists() -> None:
