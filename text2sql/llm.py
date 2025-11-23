@@ -1,6 +1,7 @@
 import os
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import json
+from pathlib import Path
 
 from mistralai.client import MistralClient
 from mistralai.models.chat_completion import ChatMessage
@@ -24,8 +25,38 @@ def get_mistral_client() -> MistralClient:
     return MistralClient(api_key=api_key)
 
 
-def generate_sql_from_nl(question: str, model: str = "mistral-small-latest") -> str:
-    schema = list_tables_and_schema()
+def validate_api_key(api_key: str) -> Tuple[bool, str]:
+    """
+    Проверяет работоспособность ключа API через простой запрос к самой дешевой модели.
+    
+    Returns:
+        Tuple[bool, str]: (успех, сообщение об ошибке или успехе)
+    """
+    try:
+        client = MistralClient(api_key=api_key)
+        # Используем самую дешевую модель для проверки
+        test_messages = [
+            ChatMessage(role="user", content="Say 'OK'")
+        ]
+        resp = client.chat(model="open-mistral-7b", messages=test_messages, temperature=0.0, max_tokens=5)
+        if resp.choices and resp.choices[0].message.content:
+            return True, "Ключ API валиден"
+        else:
+            return False, "Получен пустой ответ от API"
+    except Exception as e:
+        error_msg = str(e)
+        if "401" in error_msg or "unauthorized" in error_msg.lower() or "invalid" in error_msg.lower():
+            return False, "Неверный ключ API"
+        elif "403" in error_msg or "forbidden" in error_msg.lower():
+            return False, "Доступ запрещен. Проверьте права ключа API"
+        elif "429" in error_msg or "rate limit" in error_msg.lower():
+            return False, "Превышен лимит запросов. Попробуйте позже"
+        else:
+            return False, f"Ошибка проверки ключа: {error_msg}"
+
+
+def generate_sql_from_nl(question: str, model: str = "mistral-small-latest", db_path: Optional[Path] = None, schema_description: Optional[str] = None) -> str:
+    schema = list_tables_and_schema(db_path=db_path, schema_description=schema_description)
     client = get_mistral_client()
 
     messages = [
@@ -43,16 +74,24 @@ def generate_sql_from_nl(question: str, model: str = "mistral-small-latest") -> 
     # Try the requested model first, then a couple of fallbacks if rate-limited or unavailable
     candidate_models = [model, "mistral-small-latest", "open-mistral-7b"]
     last_err: Exception | None = None
+    text = None
     for m in candidate_models:
         try:
             resp = client.chat(model=m, messages=messages, temperature=0.0)
-            text = resp.choices[0].message.content.strip()
-            break
+            content = resp.choices[0].message.content
+            if content:
+                text = content.strip()
+                break
+            else:
+                raise ValueError(f"Empty response from model {m}")
         except Exception as e:
             last_err = e
             continue
     else:
         raise last_err if last_err else RuntimeError("Failed to generate SQL")
+    
+    if not text:
+        raise RuntimeError("Generated SQL is empty")
     # Remove code fences if any
     if text.startswith("```"):
         text = text.strip("`")
