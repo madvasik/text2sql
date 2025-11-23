@@ -1,45 +1,47 @@
 # Text-to-SQL (SQLite) — Mistral SDK
 
-NL-вопрос → SQL (SQLite) → результат.  
-CLI и Streamlit UI. БД (`data/example.db`) создаётся и наполняется автоматически.
+Генерация SQL запросов из естественного языка через Mistral API для SQLite.
 
-## Функционал
-- Генерация `SELECT` из естественного языка (Mistral API)
-- Безопасное выполнение (read-only SQLite)
-- Автосоздание демо-БД: сотрудники, отделы, проекты, ревью
-- Streamlit UI: ввод API-ключа, таблица, экспорт CSV/XLSX
-- Краткие пояснения SQL и результатов
+## Реализовано
 
+### Основной функционал
+- Генерация `SELECT` запросов из NL через Mistral API (модели: mistral-small-latest, open-mistral-7b с fallback)
+- Read-only выполнение SQL (только SELECT, защита от инъекций)
+- Импорт CSV в SQLite с автоопределением типов данных
+- Поддержка TXT файлов с описанием схемы таблицы для улучшения генерации
 
-## Установка
+### Интерфейсы
+- **Streamlit UI**: веб-интерфейс с загрузкой данных, визуализацией, экспортом
+- **CLI**: консольный интерфейс для быстрых запросов
+
+### Дополнительные фичи
+- Автоматическая визуализация результатов (столбчатые, линейные, круговые графики)
+- Генерация пояснений SQL и результатов через LLM
+- Экспорт результатов: CSV, XLSX, PNG графики
+- Валидация API ключа перед использованием
+- Автоопределение колонок для графиков
+
+## Быстрый старт
+
 ```cmd
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Запуск (Streamlit)
+**Streamlit:**
 ```cmd
-.venv\Scripts\python.exe -m streamlit run streamlit_app.py
+streamlit run streamlit_app.py
 ```
 
-## Пересоздание БД
+**CLI:**
 ```cmd
-del data\example.db
-.venv\Scripts\python.exe -m streamlit run streamlit_app.py
+# Создать .env с MISTRAL_API_KEY=...
+python -m text2sql "топ-3 сотрудников по зарплате"
 ```
-
-## Экспорт
-- CSV — встроено  
-- XLSX — `pip install openpyxl==3.1.5`
 
 ## Структура
-```
-text2sql/
-  db.py        # создание/сидинг БД, SELECT
-  llm.py       # Mistral API: SQL, пояснения
-  cli.py, __main__.py
-streamlit_app.py
-data/example.db
-requirements.txt
-```
+- `text2sql/db.py` — работа с SQLite, импорт CSV, выполнение SELECT
+- `text2sql/llm.py` — Mistral API: генерация SQL, пояснения, визуализация
+- `text2sql/cli.py` — CLI интерфейс
+- `streamlit_app.py` — Streamlit веб-интерфейс
