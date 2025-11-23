@@ -177,15 +177,6 @@ def import_csv_to_sqlite(
     try:
         cur = conn.cursor()
         
-        # Удаляем все существующие пользовательские таблицы (кроме системных sqlite_*)
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
-        existing_tables = cur.fetchall()
-        for (table_name,) in existing_tables:
-            safe_existing_name = table_name.replace('"', '""')
-            cur.execute(f'DROP TABLE IF EXISTS "{safe_existing_name}";')
-        
-        conn.commit()
-        
         # Определяем типы данных для колонок
         dtype_map = {}
         for col in df.columns:

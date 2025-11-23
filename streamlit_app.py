@@ -196,12 +196,13 @@ def render_sidebar() -> None:
     # Загрузка данных
     st.sidebar.subheader("Загрузка данных")
     
-    # Загрузка CSV файла
-    uploaded_csv = st.sidebar.file_uploader(
-        "Загрузить CSV файл",
+    # Загрузка CSV файлов (можно несколько)
+    uploaded_csvs = st.sidebar.file_uploader(
+        "Загрузить CSV файлы",
         type=['csv'],
-        help="Первая строка должна содержать названия столбцов",
-        key="csv_uploader"
+        help="Первая строка должна содержать названия столбцов. Можно загрузить несколько файлов - каждый станет отдельной таблицей.",
+        key="csv_uploader",
+        accept_multiple_files=True
     )
     
     # Загрузка TXT файла с описанием таблицы
@@ -232,45 +233,60 @@ def render_sidebar() -> None:
             with st.sidebar.expander("Просмотр описания"):
                 st.code(schema_text)
     
-    if uploaded_csv is not None:
-        table_name_input = st.sidebar.text_input(
-            "Имя таблицы",
-            value="uploaded_data",
-            help="Имя таблицы в базе данных (будет автоматически очищено от спецсимволов)"
-        )
-        
-        if st.sidebar.button("Импортировать CSV", type="primary"):
-            with st.spinner("Импорт CSV в SQLite..."):
-                tmp_path = None
-                try:
-                    # Сохраняем временный файл
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='wb') as tmp_file:
-                        tmp_file.write(uploaded_csv.getvalue())
-                        tmp_path = tmp_file.name
-                    
-                    # Импортируем CSV
-                    table_name, db_path = import_csv_to_sqlite(
-                        tmp_path,
-                        table_name_input or "uploaded_data",
-                        db_path=DB_PATH
-                    )
-                    
-                    # Обновляем session state
-                    st.session_state["db_path"] = db_path
-                    st.session_state["table_name"] = table_name
-                    st.session_state["csv_uploaded"] = True
-                    
-                    st.sidebar.success(f"CSV импортирован в таблицу '{table_name}'")
-                    
-                except Exception as e:
-                    st.sidebar.error(f"Ошибка импорта: {e}")
-                finally:
-                    # Удаляем временный файл в любом случае
-                    if tmp_path and os.path.exists(tmp_path):
-                        try:
-                            os.unlink(tmp_path)
-                        except Exception:
-                            pass
+    if uploaded_csvs and len(uploaded_csvs) > 0:
+        if st.sidebar.button("Импортировать CSV файлы", type="primary"):
+            imported_tables = []
+            errors = []
+            
+            with st.spinner(f"Импорт {len(uploaded_csvs)} CSV файлов в SQLite..."):
+                for uploaded_csv in uploaded_csvs:
+                    tmp_path = None
+                    try:
+                        # Получаем имя таблицы из имени файла (без расширения)
+                        file_name = Path(uploaded_csv.name).stem
+                        table_name_from_file = file_name
+                        
+                        # Сохраняем временный файл
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='wb') as tmp_file:
+                            tmp_file.write(uploaded_csv.getvalue())
+                            tmp_path = tmp_file.name
+                        
+                        # Импортируем CSV
+                        table_name, db_path = import_csv_to_sqlite(
+                            tmp_path,
+                            table_name_from_file,
+                            db_path=DB_PATH
+                        )
+                        
+                        imported_tables.append(table_name)
+                        
+                        # Обновляем session state (используем последнюю БД)
+                        st.session_state["db_path"] = db_path
+                        st.session_state["csv_uploaded"] = True
+                        
+                    except Exception as e:
+                        errors.append(f"{uploaded_csv.name}: {e}")
+                    finally:
+                        # Удаляем временный файл в любом случае
+                        if tmp_path and os.path.exists(tmp_path):
+                            try:
+                                os.unlink(tmp_path)
+                            except Exception:
+                                pass
+                
+                # Показываем результаты
+                if imported_tables:
+                    tables_list = ", ".join([f"'{t}'" for t in imported_tables])
+                    st.sidebar.success(f"Импортировано таблиц: {len(imported_tables)}\n{tables_list}")
+                    # Если импортирована только одна таблица, сохраняем её имя
+                    if len(imported_tables) == 1:
+                        st.session_state["table_name"] = imported_tables[0]
+                    else:
+                        st.session_state["table_name"] = None  # Несколько таблиц
+                
+                if errors:
+                    for error in errors:
+                        st.sidebar.error(error)
     
     # Кнопка для очистки данных
     if st.sidebar.button("Очистить данные"):
@@ -300,11 +316,26 @@ def main() -> None:
     
     # Показываем информацию о текущей БД
     if st.session_state.get("csv_uploaded"):
-        table_name = st.session_state.get("table_name")
-        if table_name:
-            st.info(f"📊 Используется загруженная таблица: **{table_name}**")
+        db_path = st.session_state.get("db_path")
+        if db_path:
+            try:
+                from text2sql.db import list_tables_and_schema
+                schema = list_tables_and_schema(db_path=db_path)
+                # Извлекаем имена таблиц из схемы
+                import re
+                tables = re.findall(r'TABLE (\w+)', schema)
+                if tables:
+                    if len(tables) == 1:
+                        st.info(f"📊 Используется загруженная таблица: **{tables[0]}**")
+                    else:
+                        tables_str = ", ".join([f"**{t}**" for t in tables])
+                        st.info(f"📊 Используется база данных с таблицами: {tables_str}")
+            except Exception:
+                table_name = st.session_state.get("table_name")
+                if table_name:
+                    st.info(f"📊 Используется загруженная таблица: **{table_name}**")
     else:
-        st.warning("⚠️ Загрузите CSV файл и TXT файл с описанием таблицы для начала работы")
+        st.warning("⚠️ Загрузите CSV файлы и TXT файл с описанием таблицы для начала работы")
 
     default_q = ""
     question = st.text_area("Ваш запрос", value=default_q, height=100, placeholder="например: топ-3 сотрудников по зарплате")
